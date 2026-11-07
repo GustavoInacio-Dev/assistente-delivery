@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Assistente de delivery com Step Functions, Lambda, DynamoDB e Amazon Bedrock
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: ID do modelo no Bedrock (precisa estar liberado na conta, na mesma região)
+  EmailNotificacao:
+    Type: String
+    Description: E-mail que recebe as notificações dos pedidos (confirmar a assinatura depois do deploy)
+  WaitSegundos:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 300
+    Description: Segundos de espera entre as etapas da entrega simulada
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    CodeUri: src/
+    MemorySize: 256
+    Timeout: 10
+    Tracing: Active
+
+Resources:
+  PedidosTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: pedido_id
+        Type: String
+
+  NotificacaoTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref EmailNotificacao
+
+  ValidarPedidoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: validar_pedido.app.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PedidosTable
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref PedidosTable
+
+  ProcessarPagamentoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: processar_pagamento.app.handler
+
+  PersonalizarBedrockFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: personalizar_bedrock.app.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PedidosTable
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref PedidosTable
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: api.app.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref PedidosTable
+          STATE_MACHINE_ARN: !Ref DeliveryStateMachine
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PedidosTable
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt DeliveryStateMachine.Name
+      Events:
+        CriarPedido:
+          Type: HttpApi
+          Properties:
+            Path: /pedidos
+            Method: POST
+        ConsultarPedido:
+          Type: HttpApi
+          Properties:
+            Path: /pedidos/{id}
+            Method: GET
+
+  DeliveryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      # step functions exige o prefixo /aws/vendedlogs/ pra não estourar o limite de resource policy
+      LogGroupName: !Sub /aws/vendedlogs/states/${AWS::StackName}-delivery
+      RetentionInDays: 7
+
+  DeliveryStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: statemachine/delivery.asl.json
+      DefinitionSubstitutions:
+        ValidarPedidoFunctionArn: !GetAtt ValidarPedidoFunction.Arn
+        ProcessarPagamentoFunctionArn: !GetAtt ProcessarPagamentoFunction.Arn
+        PersonalizarBedrockFunctionArn: !GetAtt PersonalizarBedrockFunction.Arn
+        TabelaPedidos: !Ref PedidosTable
+        TopicoNotificacaoArn: !Ref NotificacaoTopic
+        WaitSegundos: !Ref WaitSegundos
+      Tracing:
+        Enabled: true
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt DeliveryLogGroup.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidarPedidoFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ProcessarPagamentoFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PersonalizarBedrockFunction
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificacaoTopic.TopicName
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt PedidosTable.Arn
+            # a entrega de logs da step function não aceita restringir por recurso
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+
+Outputs:
+  ApiUrl:
+    Description: URL base da API
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+  StateMachineArn:
+    Description: ARN da máquina de estados
+    Value: !Ref DeliveryStateMachine

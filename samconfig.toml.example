@@ -1,0 +1,16 @@
+# copie para samconfig.toml e troque o e-mail (o samconfig.toml fica fora do git)
+version = 0.1
+
+[default.global.parameters]
+stack_name = "assistente-delivery"
+region = "us-east-1"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+parameter_overrides = "BedrockModelId=\"amazon.nova-lite-v1:0\" EmailNotificacao=\"seu-email@exemplo.com\" WaitSegundos=\"10\""
