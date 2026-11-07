@@ -17,6 +17,7 @@ os.environ.update(
     AWS_SECRET_ACCESS_KEY="testing",
     TABLE_NAME="Pedidos",
     BEDROCK_MODEL_ID="modelo-teste",
+    STATE_MACHINE_ARN="arn:aws:states:us-east-1:000000000000:stateMachine:teste",
 )
 
 
