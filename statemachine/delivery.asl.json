@@ -1,0 +1,257 @@
+{
+  "Comment": "Fluxo do pedido de delivery, da validação até a entrega",
+  "StartAt": "ValidarPedido",
+  "States": {
+    "ValidarPedido": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ValidarPedidoFunctionArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "total.$": "$.Payload.total"
+      },
+      "ResultPath": "$.validacao",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "ThrottlingException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["PedidoInvalidoError"],
+          "ResultPath": "$.erro",
+          "Next": "PedidoRecusado"
+        }
+      ],
+      "Next": "ProcessarPagamento"
+    },
+    "ProcessarPagamento": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessarPagamentoFunctionArn}",
+        "Payload": {
+          "pedido_id.$": "$.pedido_id",
+          "pagamento.$": "$.pagamento",
+          "tentativa.$": "$$.State.RetryCount"
+        }
+      },
+      "ResultSelector": {
+        "transacao_id.$": "$.Payload.transacao_id",
+        "status_pagamento.$": "$.Payload.status_pagamento"
+      },
+      "ResultPath": "$.pagamento_resultado",
+      "Retry": [
+        {
+          "ErrorEquals": ["GatewayTimeoutError", "Lambda.ServiceException", "Lambda.TooManyRequestsException", "ThrottlingException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["PagamentoRecusadoError", "GatewayTimeoutError"],
+          "ResultPath": "$.erro",
+          "Next": "PedidoRecusado"
+        }
+      ],
+      "Next": "PersonalizarBedrock"
+    },
+    "PersonalizarBedrock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${PersonalizarBedrockFunctionArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "mensagem_cliente.$": "$.Payload.mensagem_cliente",
+        "sugestoes.$": "$.Payload.sugestoes"
+      },
+      "ResultPath": "$.personalizacao",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "ThrottlingException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.erro_personalizacao",
+          "Next": "UsarMensagemPadrao"
+        }
+      ],
+      "Next": "AtualizarStatus"
+    },
+    "UsarMensagemPadrao": {
+      "Type": "Pass",
+      "Result": {
+        "mensagem_cliente": "Recebemos seu pedido e ele já está sendo preparado. Obrigado pela preferência!",
+        "sugestoes": []
+      },
+      "ResultPath": "$.personalizacao",
+      "Next": "AtualizarStatus"
+    },
+    "AtualizarStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${TabelaPedidos}",
+        "Key": { "pedido_id": { "S.$": "$.pedido_id" } },
+        "UpdateExpression": "SET #s = :s, transacao_id = :tx, atualizado_em = :now, historico_status = list_append(historico_status, :h)",
+        "ExpressionAttributeNames": { "#s": "status" },
+        "ExpressionAttributeValues": {
+          ":s": { "S": "PAGO" },
+          ":tx": { "S.$": "$.pagamento_resultado.transacao_id" },
+          ":now": { "S.$": "$$.State.EnteredTime" },
+          ":h": { "L": [{ "M": { "status": { "S": "PAGO" }, "em": { "S.$": "$$.State.EnteredTime" } } }] }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["DynamoDB.ProvisionedThroughputExceededException", "DynamoDB.ThrottlingException"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "NotificarCliente"
+    },
+    "NotificarCliente": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${TopicoNotificacaoArn}",
+        "Subject.$": "States.Format('Pedido {} confirmado', $.pedido_id)",
+        "Message.$": "States.Format('{} Total: R$ {}. Código do pedido: {}', $.personalizacao.mensagem_cliente, $.validacao.total, $.pedido_id)"
+      },
+      "ResultPath": null,
+      "Next": "IniciarEntrega"
+    },
+    "IniciarEntrega": {
+      "Type": "Pass",
+      "Parameters": {
+        "espera_segundos.$": "States.StringToJson('${WaitSegundos}')"
+      },
+      "ResultPath": "$.entrega",
+      "Next": "AtualizarPreparando"
+    },
+    "AtualizarPreparando": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${TabelaPedidos}",
+        "Key": { "pedido_id": { "S.$": "$.pedido_id" } },
+        "UpdateExpression": "SET #s = :s, atualizado_em = :now, historico_status = list_append(historico_status, :h)",
+        "ExpressionAttributeNames": { "#s": "status" },
+        "ExpressionAttributeValues": {
+          ":s": { "S": "PREPARANDO" },
+          ":now": { "S.$": "$$.State.EnteredTime" },
+          ":h": { "L": [{ "M": { "status": { "S": "PREPARANDO" }, "em": { "S.$": "$$.State.EnteredTime" } } }] }
+        }
+      },
+      "ResultPath": null,
+      "Next": "AguardarPreparo"
+    },
+    "AguardarPreparo": {
+      "Type": "Wait",
+      "SecondsPath": "$.entrega.espera_segundos",
+      "Next": "AtualizarSaiuParaEntrega"
+    },
+    "AtualizarSaiuParaEntrega": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${TabelaPedidos}",
+        "Key": { "pedido_id": { "S.$": "$.pedido_id" } },
+        "UpdateExpression": "SET #s = :s, atualizado_em = :now, historico_status = list_append(historico_status, :h)",
+        "ExpressionAttributeNames": { "#s": "status" },
+        "ExpressionAttributeValues": {
+          ":s": { "S": "SAIU_PARA_ENTREGA" },
+          ":now": { "S.$": "$$.State.EnteredTime" },
+          ":h": { "L": [{ "M": { "status": { "S": "SAIU_PARA_ENTREGA" }, "em": { "S.$": "$$.State.EnteredTime" } } }] }
+        }
+      },
+      "ResultPath": null,
+      "Next": "AguardarEntrega"
+    },
+    "AguardarEntrega": {
+      "Type": "Wait",
+      "SecondsPath": "$.entrega.espera_segundos",
+      "Next": "AtualizarEntregue"
+    },
+    "AtualizarEntregue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${TabelaPedidos}",
+        "Key": { "pedido_id": { "S.$": "$.pedido_id" } },
+        "UpdateExpression": "SET #s = :s, atualizado_em = :now, historico_status = list_append(historico_status, :h)",
+        "ExpressionAttributeNames": { "#s": "status" },
+        "ExpressionAttributeValues": {
+          ":s": { "S": "ENTREGUE" },
+          ":now": { "S.$": "$$.State.EnteredTime" },
+          ":h": { "L": [{ "M": { "status": { "S": "ENTREGUE" }, "em": { "S.$": "$$.State.EnteredTime" } } }] }
+        }
+      },
+      "ResultPath": null,
+      "Next": "PedidoEntregue"
+    },
+    "PedidoEntregue": {
+      "Type": "Succeed"
+    },
+    "PedidoRecusado": {
+      "Type": "Pass",
+      "Parameters": {
+        "tipo.$": "$.erro.Error",
+        "detalhe.$": "States.StringToJson($.erro.Cause)"
+      },
+      "ResultPath": "$.erro",
+      "Next": "CancelarPedido"
+    },
+    "CancelarPedido": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${TabelaPedidos}",
+        "Key": { "pedido_id": { "S.$": "$.pedido_id" } },
+        "UpdateExpression": "SET #s = :s, motivo_cancelamento = :m, atualizado_em = :now, historico_status = list_append(historico_status, :h)",
+        "ExpressionAttributeNames": { "#s": "status" },
+        "ExpressionAttributeValues": {
+          ":s": { "S": "CANCELADO" },
+          ":m": { "S.$": "$.erro.detalhe.errorMessage" },
+          ":now": { "S.$": "$$.State.EnteredTime" },
+          ":h": { "L": [{ "M": { "status": { "S": "CANCELADO" }, "em": { "S.$": "$$.State.EnteredTime" } } }] }
+        }
+      },
+      "ResultPath": null,
+      "Next": "NotificarCancelamento"
+    },
+    "NotificarCancelamento": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${TopicoNotificacaoArn}",
+        "Subject.$": "States.Format('Pedido {} cancelado', $.pedido_id)",
+        "Message.$": "States.Format('Não foi possível concluir seu pedido {}. Motivo: {}', $.pedido_id, $.erro.detalhe.errorMessage)"
+      },
+      "ResultPath": null,
+      "Next": "PedidoCancelado"
+    },
+    "PedidoCancelado": {
+      "Type": "Fail",
+      "ErrorPath": "$.erro.tipo",
+      "CausePath": "$.erro.detalhe.errorMessage"
+    }
+  }
+}
