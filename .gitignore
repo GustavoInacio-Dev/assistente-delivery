@@ -1,0 +1,20 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# sam
+.aws-sam/
+samconfig.toml
+
+# segredos
+.env
+
+# ide / so
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
