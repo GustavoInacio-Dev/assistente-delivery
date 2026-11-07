@@ -1,0 +1,10 @@
+{
+  "cliente": { "nome": "Ana", "email": "ana@exemplo.com", "preferencias": ["vegetariano"] },
+  "itens": [
+    { "sku": "PIZZA-MARG-G", "nome": "Pizza Margherita G", "quantidade": 1, "preco": 59.9 },
+    { "sku": "SUCO-LAR-500", "nome": "Suco de Laranja 500ml", "quantidade": 2, "preco": 9.5 }
+  ],
+  "endereco": { "rua": "Rua XV de Novembro", "numero": "100", "cidade": "Curitiba", "cep": "80020-310" },
+  "pagamento": { "metodo": "cartao", "token": "tok_teste_aprovado" },
+  "observacoes": "sem cebola, por favor"
+}

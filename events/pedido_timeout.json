@@ -1,0 +1,9 @@
+{
+  "cliente": { "nome": "Diego", "email": "diego@exemplo.com", "preferencias": ["picante"] },
+  "itens": [
+    { "sku": "TACO-CARNE", "nome": "Taco de Carne", "quantidade": 3, "preco": 18.0 }
+  ],
+  "endereco": { "rua": "Rua Comendador Araújo", "numero": "300", "cidade": "Curitiba", "cep": "80420-000" },
+  "pagamento": { "metodo": "cartao", "token": "tok_teste_timeout" },
+  "observacoes": "bem apimentado"
+}

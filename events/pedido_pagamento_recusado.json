@@ -1,0 +1,9 @@
+{
+  "cliente": { "nome": "Bruno", "email": "bruno@exemplo.com", "preferencias": [] },
+  "itens": [
+    { "sku": "HAMB-CLASS", "nome": "Hambúrguer Clássico", "quantidade": 2, "preco": 32.0 }
+  ],
+  "endereco": { "rua": "Av. Sete de Setembro", "numero": "2500", "cidade": "Curitiba", "cep": "80230-010" },
+  "pagamento": { "metodo": "cartao", "token": "tok_teste_recusado" },
+  "observacoes": ""
+}

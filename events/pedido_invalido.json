@@ -1,0 +1,9 @@
+{
+  "cliente": { "nome": "Carla", "email": "carla@exemplo.com", "preferencias": ["sem lactose"] },
+  "itens": [
+    { "sku": "SUSHI-COMBO-20", "nome": "Combo Sushi 20 peças", "quantidade": 1, "preco": 89.0 }
+  ],
+  "endereco": { "rua": "Rua Marechal Deodoro", "numero": "45", "cidade": "Curitiba", "cep": "80010010" },
+  "pagamento": { "metodo": "pix", "token": "tok_teste_aprovado" },
+  "observacoes": "mandar hashi extra"
+}
